@@ -113,13 +113,13 @@ single_analysis_layout = html.Div(className="grid grid-cols-1 md:grid-cols-12 ga
                     ], className="text-xs font-bold uppercase tracking-wider text-indigo-700 flex items-center"),
                     html.Span("Awaiting...", id="dominant-emotion", className="text-[10px] font-bold uppercase tracking-widest text-indigo-600 bg-indigo-100 px-3 py-1 rounded-full")
                 ]),
-                dcc.Graph(id='tone-chart', className="h-48", config={'displayModeBar': False})
+                html.Div(id='tone-chart', className="space-y-2 mt-2")
             ]),
 
             # Sentiment Journey
             html.Div(className="bg-emerald-50 rounded-xl shadow-sm border border-emerald-200 p-6", children=[
                 html.H3("📈 Sentiment Journey Arc", className="text-xs font-bold uppercase tracking-wider text-emerald-700 mb-4 flex items-center gap-2"),
-                dcc.Graph(id='journey-chart', className="h-48", config={'displayModeBar': False})
+                html.Div(id='journey-chart', className="mt-2")
             ])
         ]),
 
@@ -239,13 +239,13 @@ batch_dashboard_layout = html.Div(className="mt-6 flex flex-col gap-6", children
                             ], className="text-xs font-bold uppercase tracking-wider text-indigo-700 flex items-center"),
                             html.Span("Awaiting...", id="batch-dominant-emotion", className="text-[10px] font-bold uppercase tracking-widest text-indigo-600 bg-indigo-100 px-3 py-1 rounded-full")
                         ]),
-                        dcc.Graph(id='batch-tone-chart', className="h-40", config={'displayModeBar': False})
+                        html.Div(id='batch-tone-chart', className="space-y-2 mt-2")
                     ]),
 
                     # Sentiment Journey
                     html.Div(className="bg-emerald-50 rounded-xl shadow-sm border border-emerald-200 p-6", children=[
                         html.H3("📈 Sentiment Journey Arc", className="text-xs font-bold uppercase tracking-wider text-emerald-700 mb-4 flex items-center gap-2"),
-                        dcc.Graph(id='batch-journey-chart', className="h-40", config={'displayModeBar': False})
+                        html.Div(id='batch-journey-chart', className="mt-2")
                     ])
                 ]),
                 
@@ -568,25 +568,35 @@ def run_analysis(n_clicks, contents, filename, lang):
                 risk_ui.append(html.Div([html.Span("🚩", className="animate-pulse text-red-500 mr-2"), f], 
                     className="flex items-center bg-red-100 border border-red-200 p-2 rounded-lg text-[10px] text-red-700 font-bold uppercase tracking-wider mb-2"))
                     
-        # Tone Chart
+        # Tone Bars (HTML CSS)
         emotions = audit.get('emotion_scores', {})
-        labels = list(emotions.keys())
-        values = list(emotions.values())
-        colors = ['#ef4444', '#6366f1', '#a855f7', '#fb923c', '#22c55e', '#64748b', '#3b82f6', '#fbbf24']
-        
-        fig_tone = go.Figure(data=[go.Bar(x=labels, y=values, marker_color=colors)])
-        fig_tone.update_layout(margin=dict(l=0, r=0, t=20, b=0), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-        fig_tone.update_xaxes(showgrid=False)
-        fig_tone.update_yaxes(showgrid=True, gridcolor='rgba(0,0,0,0.05)')
+        emotion_colors = {'angry': '#ef4444', 'calm': '#6366f1', 'disgust': '#a855f7', 'fearful': '#fb923c', 'happy': '#22c55e', 'neutral': '#64748b', 'sad': '#3b82f6', 'surprised': '#fbbf24'}
+        fig_tone = []
+        for emo, val in emotions.items():
+            pct = int(val * 100)
+            bar_color = emotion_colors.get(emo, '#94a3b8')
+            fig_tone.append(html.Div(className="flex items-center gap-2", children=[
+                html.Span(emo.title(), className="text-[10px] text-gray-600 w-16 uppercase font-bold shrink-0"),
+                html.Div(className="flex-1 bg-gray-200 rounded-full h-2 overflow-hidden", children=[
+                    html.Div(style={"width": f"{pct}%", "backgroundColor": bar_color}, className="h-full rounded-full")
+                ]),
+                html.Span(f"{pct}%", className="text-[10px] text-gray-500 w-7 text-right")
+            ]))
         
         dom_emotion = max(emotions, key=emotions.get).upper() if emotions else "UNKNOWN"
         
-        # Journey Chart
+        # Journey Sparkline (HTML dots)
         journey = audit.get('sentiment_journey', [])
-        fig_journey = go.Figure(data=[go.Scatter(y=journey, mode='lines+markers', line=dict(color='#22c55e', width=3), fill='tozeroy', fillcolor='rgba(34,197,94,0.1)')])
-        fig_journey.update_layout(margin=dict(l=0, r=0, t=10, b=0), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-        fig_journey.update_xaxes(showgrid=False, showticklabels=False)
-        fig_journey.update_yaxes(showgrid=True, gridcolor='rgba(0,0,0,0.05)', range=[-1.1, 1.1])
+        def sentiment_dot(val):
+            if val > 0.3: return "bg-green-500"
+            elif val < -0.3: return "bg-red-500"
+            return "bg-yellow-400"
+        
+        fig_journey = html.Div(className="flex items-end gap-1 h-16", children=[
+            html.Div(className=f"flex-1 rounded-sm {sentiment_dot(v)}",
+                style={"height": f"{int((v + 1) / 2 * 100)}%", "minHeight": "4px"})
+            for v in journey
+        ])
         
         # Transcript Content
         transcript_ui = []
@@ -649,16 +659,9 @@ def run_analysis(n_clicks, contents, filename, lang):
     Input('run-batch-btn', 'n_clicks'),
     State('upload-batch-excel', 'contents'),
     State('upload-batch-excel', 'filename'),
-    background=True,
-    running=[
-        (Output("run-batch-btn", "disabled"), True, False),
-        (Output("run-batch-btn", "children"), "⏳ Processing... Do Not Close", "▶ Run Batch Processor"),
-        (Output("run-batch-btn", "className"), "text-xs bg-gray-400 text-amber-100 font-bold px-4 py-2 rounded shadow cursor-not-allowed animate-pulse", "text-xs bg-green-500 text-white font-bold px-4 py-2 rounded shadow hover:bg-green-600 transition-all")
-    ],
-    progress=[Output('batch-progress-status', 'children')],
     prevent_initial_call=True
 )
-def run_batch_process(set_progress, n_clicks, excel_contents, excel_filename):
+def run_batch_process(n_clicks, excel_contents, excel_filename):
     """Integrates the external batch processor directly into the Dash runtime using an uploaded file."""
     if not n_clicks:
         return dash.no_update
@@ -735,14 +738,8 @@ def run_batch_process(set_progress, n_clicks, excel_contents, excel_filename):
         if total_processed_seconds + length > max_seconds:
              msg = f"⚠️ [Limit Reached]: Processed {processed_count} files before hitting safety limit. Done."
              print(msg)
-             set_progress(msg)
              break
              
-        msg = html.Div([
-            html.Span(f"🔄 Processing File {processed_count + 1} of {total_files}... ", className="text-blue-600"),
-            html.Span(f"(Phone: {phone})", className="text-gray-500 font-normal")
-        ])
-        set_progress(msg)
         print(f"\n[BATCH] Processing {phone} (Len: {length}s)")
         temp_filename = f"dash_batch_{int(time.time())}_{idx}.mp3"
         
@@ -935,25 +932,35 @@ def update_batch_details(selected_rows, data):
         # 2. Accuracy
         acc = str(audit.get('transcription_confidence', '--'))
         
-        # 3. Tone Chart
+        # 3. Tone Bars (HTML CSS)
         emotions = audit.get('emotion_scores', {})
-        labels = list(emotions.keys())
-        values = list(emotions.values())
-        colors = ['#ef4444', '#6366f1', '#a855f7', '#fb923c', '#22c55e', '#64748b', '#3b82f6', '#fbbf24']
-        
-        fig_tone = go.Figure(data=[go.Bar(x=labels, y=values, marker_color=colors)])
-        fig_tone.update_layout(margin=dict(l=0, r=0, t=10, b=0), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-        fig_tone.update_xaxes(showgrid=False)
-        fig_tone.update_yaxes(showgrid=True, gridcolor='rgba(0,0,0,0.05)')
-        
+        emotion_colors = {'angry': '#ef4444', 'calm': '#6366f1', 'disgust': '#a855f7', 'fearful': '#fb923c', 'happy': '#22c55e', 'neutral': '#64748b', 'sad': '#3b82f6', 'surprised': '#fbbf24'}
+        fig_tone = []
+        for emo, val in emotions.items():
+            pct = int(val * 100)
+            bar_color = emotion_colors.get(emo, '#94a3b8')
+            fig_tone.append(html.Div(className="flex items-center gap-2", children=[
+                html.Span(emo.title(), className="text-[10px] text-gray-600 w-16 uppercase font-bold shrink-0"),
+                html.Div(className="flex-1 bg-gray-200 rounded-full h-2 overflow-hidden", children=[
+                    html.Div(style={"width": f"{pct}%", "backgroundColor": bar_color}, className="h-full rounded-full")
+                ]),
+                html.Span(f"{pct}%", className="text-[10px] text-gray-500 w-7 text-right")
+            ]))
+
         dom_emotion = max(emotions, key=emotions.get).upper() if emotions else "UNKNOWN"
-        
-        # 4. Journey Chart
+
+        # 4. Journey Sparkline (HTML dots)
         journey = audit.get('sentiment_journey', [])
-        fig_journey = go.Figure(data=[go.Scatter(y=journey, mode='lines+markers', line=dict(color='#22c55e', width=3), fill='tozeroy', fillcolor='rgba(34,197,94,0.1)')])
-        fig_journey.update_layout(margin=dict(l=0, r=0, t=10, b=0), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-        fig_journey.update_xaxes(showgrid=False, showticklabels=False)
-        fig_journey.update_yaxes(showgrid=True, gridcolor='rgba(0,0,0,0.05)', range=[-1.1, 1.1])
+        def sentiment_dot(val):
+            if val > 0.3: return "bg-green-500"
+            elif val < -0.3: return "bg-red-500"
+            return "bg-yellow-400"
+
+        fig_journey = html.Div(className="flex items-end gap-1 h-16", children=[
+            html.Div(className=f"flex-1 rounded-sm {sentiment_dot(v)}",
+                style={"height": f"{int((v + 1) / 2 * 100)}%", "minHeight": "4px"})
+            for v in journey
+        ])
         
         # 5. Transcript Content
         transcript_ui = []
@@ -1008,4 +1015,4 @@ def update_batch_details(selected_rows, data):
 
 
 if __name__ == '__main__':
-    app.run(debug=False, port=8050)
+    app.run(debug=True, port=8050)
