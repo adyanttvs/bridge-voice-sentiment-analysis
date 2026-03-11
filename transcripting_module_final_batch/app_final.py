@@ -127,6 +127,7 @@ single_analysis_layout = html.Div(className="grid grid-cols-1 md:grid-cols-12 ga
         html.Div(className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 flex flex-col relative overflow-hidden", style={"minHeight": "380px"}, children=[
             html.H2("Interaction Analysis", className="text-lg font-semibold text-gray-800 mb-4"),
             html.Div(id="audio-player-container", className="mb-4 hidden", children=html.Audio(id="audio-player", controls=True, className="w-full")),
+            html.Div(id="engine-indicator-container", className="mb-2 hidden"),
             
             dcc.Loading(
                 id="loading-shield",
@@ -145,7 +146,7 @@ batch_dashboard_layout = html.Div(className="mt-6 flex flex-col gap-6", children
         html.Div(className="flex justify-between items-center mb-6", children=[
             html.H2("Batch Analysis Dashboard", className="text-xl font-bold text-gray-800"),
             html.Div(className="flex gap-2", children=[
-                html.Button("Run Batch Processor", id="run-batch-btn", className="text-xs bg-green-500 text-white font-bold px-4 py-2 rounded shadow hover:bg-green-600 transition-all"),
+                html.Button("▶ Run Batch Processor", id="run-batch-btn", className="text-xs bg-green-500 text-white font-bold px-4 py-2 rounded shadow hover:bg-green-600 transition-all"),
                 html.Button("Refresh Data", id="refresh-batch-btn", className="text-xs bg-blue-50 text-blue-600 px-4 py-2 rounded border border-blue-200 hover:bg-blue-100")
             ])
         ]),
@@ -171,8 +172,19 @@ batch_dashboard_layout = html.Div(className="mt-6 flex flex-col gap-6", children
             html.Div(id='batch-upload-status', className="text-xs text-green-600 font-semibold mt-2 min-h-[16px]")
         ]),
         
+        html.Div(className="p-3 bg-amber-50 border border-amber-200 text-amber-800 rounded-lg text-xs mb-4 flex items-center gap-2", children=[
+            html.Span("⚠️", className="text-lg"),
+            html.Span("WARNING: The Groq API has a strict 1-hour audio processing limit per key. If hit, the system automatically shifts to Local Models. Processing will be slower. Leave the browser tab open while running.", className="font-semibold")
+        ]),
+        
         html.Div(id="batch-progress-status", className="mb-4 text-sm font-bold text-indigo-600"),
-        html.Div(id="batch-table-container", children=html.Div("Loading data... Click Refresh Data to view existing results.", className="text-gray-500 italic"))
+        
+        dcc.Loading(
+            id="loading-batch-table",
+            type="dot",
+            color="#3b82f6",
+            children=html.Div(id="batch-table-container", children=html.Div("Upload data and run the processor to view results.", className="text-gray-500 italic"))
+        )
     ]),
     
     html.Div(id="batch-details-panel", className="hidden", children=[
@@ -257,7 +269,7 @@ app.layout = html.Div(className="p-4 md:p-8 bg-slate-50 min-h-screen text-slate-
             html.Div(className="flex items-center gap-3", children=[
                 html.Div("📡", className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center text-xl text-white shadow-lg"),
                 html.H1([
-                    "GoBumpr ", 
+                    "Bridge ", 
                     html.Span("Voice", className="font-light text-gray-500"), 
                     " Sentiment Analysis ",
                     html.Span("Dash v5.0", className="text-xs bg-blue-100 text-blue-600 px-2 py-0.5 rounded ml-2")
@@ -265,7 +277,7 @@ app.layout = html.Div(className="p-4 md:p-8 bg-slate-50 min-h-screen text-slate-
             ]),
             html.Div([
                 html.Div(className="w-2 h-2 bg-blue-400 rounded-full animate-pulse"),
-                "GoBumpr AI Cloud Intelligence"
+                "Bridge AI Cloud Intelligence"
             ], className="px-3 py-1 bg-blue-50 rounded-full text-[10px] md:text-xs flex items-center gap-2 text-blue-700")
         ]),
 
@@ -480,7 +492,9 @@ def update_batch_upload_status(filename):
         Output('journey-chart', 'figure'),
         Output('results-content', 'children'),
         Output('audio-player-container', 'className'),
-        Output('audio-player', 'src')
+        Output('audio-player', 'src'),
+        Output('engine-indicator-container', 'children'),
+        Output('engine-indicator-container', 'className')
     ],
     Input('start-btn', 'n_clicks'),
     State('upload-audio', 'contents'),
@@ -490,7 +504,7 @@ def update_batch_upload_status(filename):
 )
 def run_analysis(n_clicks, contents, filename, lang):
     if not contents:
-        return ["--", html.Div("Please upload audio first.", className="italic"), "--", html.Div("No risks detected...", className="italic text-gray-400")] + [dash.no_update]*6
+        return ["--", html.Div("Please upload audio first.", className="italic"), "--", html.Div("No risks detected...", className="italic text-gray-400")] + [dash.no_update]*6 + [dash.no_update, "hidden"]
 
     # Decode and save audio safely
     content_type, content_string = contents.split(',')
@@ -501,7 +515,23 @@ def run_analysis(n_clicks, contents, filename, lang):
         with open(temp_filename, "wb") as f:
             f.write(decoded)
             
-        data = process_audio_file(temp_filename, lang)
+        success = False
+        engine_used = "groq"
+        
+        # Try Cloud API first
+        try:
+            data = process_audio_file(temp_filename, lang)
+            success = True
+        except Exception as api_err:
+            err_msg = str(api_err)
+            if '429' in err_msg or 'rate_limit_exceeded' in err_msg or 'timeout' in err_msg.lower() or 'read' in err_msg.lower():
+                print("[SINGLE] API Error! Triggering LOCAL FALLBACK model...")
+                engine_used = "local"
+                data = process_audio_local(temp_filename, lang)
+                success = True
+            else:
+                raise api_err
+                
         audit = data['audit']
         
         # UI Builders
@@ -593,11 +623,23 @@ def run_analysis(n_clicks, contents, filename, lang):
             html.P(f"\"{audit.get('summary', '')}\"", className="text-slate-700 text-lg italic leading-relaxed font-light mb-6")
         ]))
         
-        return quality_score, criteria_list, acc, risk_ui, fig_tone, dom_emotion, fig_journey, transcript_ui, "mb-4 block", contents
+        # Engine UI Builder
+        if engine_used == "groq":
+            engine_ui = html.Div(className="bg-purple-100 border border-purple-200 text-purple-700 px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-2", children=[
+                html.Span("⚡", className="animate-pulse"),
+                "Processed via Groq Cloud API (Ultra-Fast)"
+            ])
+        else:
+            engine_ui = html.Div(className="bg-amber-100 border border-amber-200 text-amber-700 px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-2", children=[
+                html.Span("🖥️", className="animate-pulse"),
+                "Processed via Local Fallback Engine (Offline Modes Active)"
+            ])
+        
+        return quality_score, criteria_list, acc, risk_ui, fig_tone, dom_emotion, fig_journey, transcript_ui, "mb-4 block", contents, engine_ui, "mb-2 block flex justify-end"
         
     except Exception as e:
         print(e)
-        return ["Error", html.Div(str(e)), "--", html.Div("Error evaluating", className="italic text-red-500")] + [dash.no_update]*6
+        return ["Error", html.Div(str(e)), "--", html.Div("Error evaluating", className="italic text-red-500")] + [dash.no_update]*6 + [dash.no_update, "hidden"]
     finally:
         if os.path.exists(temp_filename):
             os.remove(temp_filename)
@@ -610,11 +652,13 @@ def run_analysis(n_clicks, contents, filename, lang):
     background=True,
     running=[
         (Output("run-batch-btn", "disabled"), True, False),
-        (Output("run-batch-btn", "className"), "text-xs bg-gray-400 text-white font-bold px-4 py-2 rounded shadow cursor-not-allowed", "text-xs bg-green-500 text-white font-bold px-4 py-2 rounded shadow hover:bg-green-600 transition-all")
+        (Output("run-batch-btn", "children"), "⏳ Processing... Do Not Close", "▶ Run Batch Processor"),
+        (Output("run-batch-btn", "className"), "text-xs bg-gray-400 text-amber-100 font-bold px-4 py-2 rounded shadow cursor-not-allowed animate-pulse", "text-xs bg-green-500 text-white font-bold px-4 py-2 rounded shadow hover:bg-green-600 transition-all")
     ],
+    progress=[Output('batch-progress-status', 'children')],
     prevent_initial_call=True
 )
-def run_batch_process(n_clicks, excel_contents, excel_filename):
+def run_batch_process(set_progress, n_clicks, excel_contents, excel_filename):
     """Integrates the external batch processor directly into the Dash runtime using an uploaded file."""
     if not n_clicks:
         return dash.no_update
@@ -632,7 +676,10 @@ def run_batch_process(n_clicks, excel_contents, excel_filename):
     sanitized_name = "".join([c for c in base_name if c.isalpha() or c.isdigit() or c=='_']).rstrip()
     if not sanitized_name:
         sanitized_name = "batch"
-    output_path = f"C:/Users/k02401/Downloads/batch_data/{sanitized_name}_results.csv"
+        
+    batch_dir = "./batch_data"
+    os.makedirs(batch_dir, exist_ok=True)
+    output_path = f"{batch_dir}/{sanitized_name}_results.csv"
     
     # Parse the uploaded file
     try:
@@ -653,6 +700,7 @@ def run_batch_process(n_clicks, excel_contents, excel_filename):
         return "⚠️ Error: Uploaded file is missing required columns ('Phone Number', 'Length In Sec', 'Location')."
         
     filtered_df = df[df['Length In Sec'] > 100].copy()
+    total_files = len(filtered_df)
     
     # Load past results to avoid reprocessing
     existing_phones = set()
@@ -685,9 +733,16 @@ def run_batch_process(n_clicks, excel_contents, excel_filename):
             continue
             
         if total_processed_seconds + length > max_seconds:
-             print(f"[BATCH] Reached safe 1-hour limit window. Batch Run Complete.")
+             msg = f"⚠️ [Limit Reached]: Processed {processed_count} files before hitting safety limit. Done."
+             print(msg)
+             set_progress(msg)
              break
              
+        msg = html.Div([
+            html.Span(f"🔄 Processing File {processed_count + 1} of {total_files}... ", className="text-blue-600"),
+            html.Span(f"(Phone: {phone})", className="text-gray-500 font-normal")
+        ])
+        set_progress(msg)
         print(f"\n[BATCH] Processing {phone} (Len: {length}s)")
         temp_filename = f"dash_batch_{int(time.time())}_{idx}.mp3"
         
@@ -733,7 +788,7 @@ def run_batch_process(n_clicks, excel_contents, excel_filename):
                 
                 # Save full JSON to local cache for Single Analysis tab integration
                 try:
-                    with open(f"C:/Users/k02401/Downloads/batch_data/{phone}.json", "w", encoding="utf-8") as jf:
+                    with open(f"./batch_data/{phone}.json", "w", encoding="utf-8") as jf:
                         json.dump(data, jf)
                 except Exception as e:
                     print(f"[BATCH] Failed to cache JSON for {phone}: {e}")
@@ -766,14 +821,16 @@ def run_batch_process(n_clicks, excel_contents, excel_filename):
                 except:
                     pass
     
-    return f"Batch Run Complete: Processed {processed_count} new files in this session."
-
+    return html.Div([
+        html.Span("✅ Batch completed! ", className="text-green-600"),
+        html.Span(f"Processed {processed_count} new files total.")
+    ])
 
 
 @app.callback(
     Output('batch-table-container', 'children'),
     Input('refresh-batch-btn', 'n_clicks'),
-    Input('upload-batch-excel', 'filename')
+    State('upload-batch-excel', 'filename')
 )
 def load_batch_table(n_clicks, filename):
     if not filename:
@@ -783,7 +840,10 @@ def load_batch_table(n_clicks, filename):
     sanitized_name = "".join([c for c in base_name if c.isalpha() or c.isdigit() or c=='_']).rstrip()
     if not sanitized_name:
         sanitized_name = "batch"
-    csv_path = f"C:/Users/k02401/Downloads/batch_data/{sanitized_name}_results.csv"
+        
+    batch_dir = "./batch_data"
+    os.makedirs(batch_dir, exist_ok=True)
+    csv_path = f"{batch_dir}/{sanitized_name}_results.csv"
     
     if not os.path.exists(csv_path):
         return html.Div(f"No batch tracking file found for {filename}. Run batch analyzer first.", className="text-red-500")
@@ -825,7 +885,11 @@ def load_batch_table(n_clicks, filename):
         Output('batch-journey-chart', 'figure'),
         Output('batch-results-content', 'children'),
         Output('batch-audio-player-container', 'className'),
-        Output('batch-audio-player', 'src')
+        Output('batch-audio-player', 'src'),
+        Output('dash-score', 'children'),
+        Output('dash-sentiment', 'children'),
+        Output('dash-summary', 'children'),
+        Output('dash-risks', 'children')
     ],
     Input('batch-table', 'selected_rows'),
     State('batch-table', 'data'),
@@ -833,17 +897,17 @@ def load_batch_table(n_clicks, filename):
 )
 def update_batch_details(selected_rows, data):
     if not selected_rows or not data:
-        return "hidden", dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, "hidden", ""
+        return "hidden", dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, "hidden", "", dash.no_update, dash.no_update, dash.no_update, dash.no_update
         
     row = data[selected_rows[0]]
     phone = row.get('Phone Number', '')
     url = row.get('Audio URL', '')
     
-    json_path = f"C:/Users/k02401/Downloads/batch_data/{phone}.json"
+    json_path = f"./batch_data/{phone}.json"
     
     if not os.path.exists(json_path):
         err_msg = html.Div(f"⚠️ Cached data ({phone}.json) not found. You must re-run the batch processor.", className="font-bold text-red-500 p-4")
-        return "block mt-6", html.Div("Missing Data", className="italic text-red-500"), "--", err_msg, dash.no_update, dash.no_update, dash.no_update, "hidden", ""
+        return "block mt-6", html.Div("Missing Data", className="italic text-red-500"), "--", dash.no_update, dash.no_update, dash.no_update, [err_msg], "hidden", "", "--", "--", "Missing Summary", "Missing Risks"
         
     try:
         with open(json_path, "r", encoding="utf-8") as jf:
@@ -926,11 +990,21 @@ def update_batch_details(selected_rows, data):
             html.P(f"\"{audit.get('summary', '')}\"", className="text-slate-700 text-lg italic leading-relaxed font-light mb-6")
         ]))
         
-        return "block mt-6", criteria_list, acc, fig_tone, dom_emotion, fig_journey, transcript_ui, "mb-4 block", url
+        dash_score_ui = str(audit.get('total_score', '--'))
+        dash_sentiment_ui = audit.get('sentiment', {}).get('label', 'Unknown').upper()
+        dash_summary_ui = audit.get('summary', 'No summary provided.')
+        
+        flags = audit.get('risk_flags', [])
+        if not flags:
+            dash_risks_ui = html.Div("✅ NO RISKS", className="text-[10px] text-green-600 font-bold uppercase tracking-widest")
+        else:
+            dash_risks_ui = [html.Div(f"🚩 {f}", className="text-red-600 text-xs mb-1") for f in flags]
+
+        return "block mt-6", criteria_list, acc, fig_tone, dom_emotion, fig_journey, transcript_ui, "mb-4 block", url, dash_score_ui, dash_sentiment_ui, dash_summary_ui, dash_risks_ui
         
     except Exception as e:
         err_msg = html.Div(f"Internal JSON read error: {e}", className="font-bold text-red-500 rounded p-4")
-        return "block mt-6", html.Div("Missing JSON", className="italic"), "--", dash.no_update, dash.no_update, dash.no_update, [err_msg], "hidden", ""
+        return "block mt-6", html.Div("Missing JSON", className="italic"), "--", dash.no_update, dash.no_update, dash.no_update, [err_msg], "hidden", "", "--", "--", "Error", "Error"
 
 
 if __name__ == '__main__':
